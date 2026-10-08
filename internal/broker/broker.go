@@ -39,3 +39,20 @@ func (b *Broker) GetTopic(topicName string) (*topic.Topic, error) {
 	}
 	return t, nil
 }
+
+func (b *Broker) UnsubAll(s *topic.Subscriber) {
+	b.m.RLock()
+	topics := make([]*topic.Topic, 0, len(b.topics))
+	for _, t := range b.topics {
+		topics = append(topics, t)
+
+	}
+	b.m.RUnlock()
+	for _, t := range topics {
+		t.Unsub(s)
+	}
+}
+
+func (b *Broker) GetNewMsgId() uint64 {
+	return b.nextID.Add(1)
+}

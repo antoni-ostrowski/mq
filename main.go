@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -79,22 +83,44 @@ func handleConn(conn net.Conn, broker *broker.Broker) {
 
 	sub := topic.NewSubscriber(conn)
 
+	defer broker.UnsubAll(sub)
+
+	w := bufio.NewWriter(conn)
 	wg.Go(func() {
-		// for _ := range sub.Outbound {
-		// 	//			conn.Write(msg.Payload)
-		// }
+		// MSG <topic> <id> <len>\nbytes
+		for msg := range sub.Outbound {
+			l := len(msg.Payload)
+			if _, err := fmt.Fprintf(w, "MSG %s %d %d\n", msg.Topic, msg.ID, l); err != nil {
+				conn.Close()
+				return
+			}
+			if _, err := w.Write(msg.Payload); err != nil {
+				conn.Close()
+				return
+			}
+			if err := w.Flush(); err != nil {
+				conn.Close()
+				return
+			}
+		}
 	})
 
 	wg.Go(func() {
-		buf := make([]byte, 256)
+		defer close(sub.Outbound)
+		r := bufio.NewReader(conn)
 		for {
-			n, err := conn.Read(buf)
+			line, err := r.ReadString('\n')
 			if err != nil {
-				slog.Error("failed to read from conn", "error", err.Error())
+				if err != io.EOF {
+					slog.Error("failed to read from conn", "error", err.Error())
+				}
 				return
 			}
-			r, _, _ := strings.CutLast(string(buf[:n]), "\r\n")
-			args := strings.Split(r, " ")
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			args := strings.Fields(line)
 
 			slog.Info("found client input")
 			for _, arg := range args {
@@ -102,11 +128,12 @@ func handleConn(conn net.Conn, broker *broker.Broker) {
 			}
 
 			if len(args) == 0 {
-				slog.Info("args slice is 0 len")
-				return
+				continue
 			}
-			switch args[0] {
-			case "SUB":
+			cmd := args[0]
+
+			switch cmd {
+			case "SUB", "UNSUB":
 				if len(args) < 2 {
 					slog.Info("args slice is too short, want 2, got <2")
 					continue
@@ -116,11 +143,73 @@ func handleConn(conn net.Conn, broker *broker.Broker) {
 				topic, err := broker.GetTopic(topicName)
 				if err != nil {
 					slog.Error("failed to get topic", "error", err.Error())
+					continue
+				}
+				if cmd == "SUB" {
+					topic.Sub(sub)
+				} else {
+					topic.Unsub(sub)
+				}
+			case "CREATE":
+				if len(args) < 2 {
+					slog.Info("args slice is too short, want 2, got <2")
+					continue
+				}
+				newTopicName := args[1]
+				broker.RegisterTopic(topic.New(newTopicName))
+				// PUB <topic> <len>\nbytes
+				// followed by exactly <len> raw bytes (may contain spaces/newlines)
+			case "PUB":
+				if len(args) < 3 {
+					slog.Info("not enough args, need: PUB <topic> <len>")
+					continue
+				}
+				t, err := broker.GetTopic(args[1])
+				if err != nil {
+					continue
+				}
+				payloadLen, err := strconv.Atoi(args[2])
+				if err != nil || payloadLen < 0 {
+					slog.Info("invalid payload len", "value", args[2])
+					continue
+				}
+				const maxPayload = 1 << 20
+				if payloadLen > maxPayload {
+					slog.Info("payload too large", "len", payloadLen)
+					continue
+				}
+				payloadBuf := make([]byte, payloadLen)
+				if _, err := io.ReadFull(r, payloadBuf); err != nil {
+					slog.Error("failed to read payload", "error", err.Error())
 					return
 				}
-				topic.Subscribe(sub)
+
+				t.Publish(topic.Message{ID: broker.GetNewMsgId(), Payload: payloadBuf})
+
+			// ACK <topic> <id>
+			case "ACK", "NACK":
+				if len(args) < 3 {
+					slog.Info("not enough args, need: ACK <topic> <id>")
+					continue
+				}
+
+				t, err := broker.GetTopic(args[1])
+				if err != nil {
+					continue
+				}
+				id, err := strconv.ParseUint(args[2], 10, 64)
+				if err != nil {
+					continue
+				}
+				if cmd == "ACK" {
+					t.Ack(sub, id)
+				} else {
+					t.Nack(sub, id)
+
+				}
 
 			}
+
 		}
 
 	})

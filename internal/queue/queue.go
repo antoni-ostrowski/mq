@@ -48,6 +48,19 @@ func (q *Queue[T]) Pop() (T, bool) {
 	return m, true
 }
 
+func (q *Queue[T]) PushFront(msg T) error {
+	q.m.Lock()
+	defer q.m.Unlock()
+	if q.size >= len(q.arr) {
+		return errors.New("queue already at max cap")
+	}
+	// add len of arr to properly handle negative index
+	q.tail = (q.tail - 1 + len(q.arr)) % len(q.arr)
+	q.arr[q.tail] = msg
+	q.size++
+	return nil
+}
+
 func (q *Queue[T]) nextIndex(curr_index int) int {
 	return (curr_index + 1) % len(q.arr)
 }
