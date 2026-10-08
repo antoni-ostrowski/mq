@@ -1,34 +1,28 @@
-package main
+package queue
 
 import (
 	"errors"
 	"sync"
 )
 
-type Message struct {
-}
-
-func NewMessage() Message {
-	m := Message{}
-	return m
-}
-
-type Queue struct {
+type Queue[T any] struct {
 	head int
 	tail int
 	size int
-	arr  []Message
+	arr  []T
 	m    sync.Mutex
 }
 
 const QUEUE_BASE_CAP = 100
 
-func NewQueue() *Queue {
-	q := Queue{head: 0, tail: 0, size: 0, arr: make([]Message, QUEUE_BASE_CAP)}
+func NewQueue[T any]() *Queue[T] {
+	q := Queue[T]{head: 0, tail: 0, size: 0, arr: make([]T, QUEUE_BASE_CAP)}
 	return &q
 }
 
-func (q *Queue) Push(n Message) error {
+func (q *Queue[T]) Push(n T) error {
+	q.m.Lock()
+	defer q.m.Unlock()
 	if q.size >= len(q.arr) {
 		return errors.New("queue already at max cap")
 	}
@@ -38,23 +32,22 @@ func (q *Queue) Push(n Message) error {
 	return nil
 }
 
-func (q *Queue) Pop() (Message, bool) {
+func (q *Queue[T]) Pop() (T, bool) {
+	var zeroT T
+	q.m.Lock()
+	defer q.m.Unlock()
 	if q.size == 0 {
-		return Message{}, false
+		return zeroT, false
 	}
 	m := q.arr[q.tail]
 	// drop reference to message payload so it can be freed by GC, before we overwrrte it
 	// which can happen after long time
-	q.arr[q.tail] = Message{}
+	q.arr[q.tail] = zeroT
 	q.size -= 1
 	q.tail = q.nextIndex(q.tail)
 	return m, true
 }
 
-func (q *Queue) nextIndex(curr_index int) int {
+func (q *Queue[T]) nextIndex(curr_index int) int {
 	return (curr_index + 1) % len(q.arr)
-}
-
-func main() {
-
 }
