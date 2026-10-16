@@ -1,5 +1,8 @@
 [tools]
-go = "1.27.0"
+go = "1.27.1"
 
 [tasks.dev]
 run = "go run ./cmd/mq"
+
+[tasks.test]
+run = "go test ./... -race"
